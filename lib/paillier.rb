@@ -12,6 +12,9 @@ require_relative 'paillier/zkp'
 
 module Paillier
 
+	MAXVAL = 2**2046
+	MINVAL = -MAXVAL
+
 	def self.gcd(u,v) # :nodoc:
 		while(v > 0)
 			u, v = v, u % v
@@ -51,7 +54,7 @@ module Paillier
 			raise ArgumentError, "#{a} has no inverse mod #{p}"
 		end
 		return x % p
-	end 
+	end
 
 	# Returns modular exponent
 	# (base ** exponent) % modulus
@@ -88,7 +91,7 @@ module Paillier
 		u_2 = (u - 1) / n
 		# now we have mu
 		mu = Paillier.modInv(u_2, n)
-		
+
 		return PrivateKey.new(lambda_n, mu), PublicKey.new(n)
 	end
 
@@ -129,6 +132,27 @@ module Paillier
 		end
 		return rEncrypt(publicKey, plaintext)[1]
 	end
+
+	# Encrypts an integer with the provided public key
+	#
+	# Example:
+	#	>> Paillier.encrypt(publicKey, -3)
+	#	=> #<OpenSSL::BN:cyphertext>
+	#
+	# Arguments:
+	#	publicKey: (Paillier::PublicKey)
+	#	plaintext: (Int, OpenSSL::BN, String)
+	def self.integer_encrypt(publicKey, plaintext)
+		if( plaintext.is_a?(Integer) )
+			if( plaintext > MINVAL && plaintext < MAXVAL)
+				plaintext = plaintext + MAXVAL
+			else
+				raise "Value of #{plaintext} is too large"
+			end
+		end
+		return encrypt(publicKey, plaintext)
+	end
+
 
 	# Adds one encrypted int to another
 	#
@@ -190,6 +214,27 @@ module Paillier
 		return modPow(a, n, publicKey.n_sq)
 	end
 
+	# Computes an approximate encrypted average of an array of encrypted integers multiplied by a scale factor/precision
+	# which is also returned with the result
+	# (since we are limited to integer mult and ideally need float div)
+	def self.eMean(publicKey, cnums, precision = 1000000)
+		count = cnums.length
+		czero = Paillier.encrypt(publicKey, 0)
+		csum = cnums.inject(czero){ |c_intermediate_sum, ci| Paillier.eAdd(publicKey, ci, c_intermediate_sum) }
+		# need to do floating point division but we seem to be limited to integer mult so ::shrug::
+		# inherently inaccurate, but this is one way to go about it
+		precision = precision.to_f
+		inverse_count_times_precision_rounded = (precision/count.to_f).round
+		cavg = Paillier.eMulConst(publicKey, csum, inverse_count_times_precision_rounded)
+		return cavg, precision
+	end
+
+	# Returns encrypted 1 if the first encrypted number is less than the second,
+	# otherwise returns encrypted 0.
+	# def self.eLessThan(publicKey, ca, cb)
+
+	# end
+
 	# Decrypts a message, returning plaintext
 	#
 	# Example:
@@ -209,6 +254,11 @@ module Paillier
 		x = ciphertext.to_bn.mod_exp(privKey.l, pubKey.n_sq) - 1
 		plain = (x.to_i / pubKey.n.to_i).to_bn.mod_mul(privKey.m, pubKey.n)
 		return plain
+	end
+
+	def self.integer_decrypt(privKey, pubKey, ciphertext)
+		plain = decrypt(privKey, pubKey, ciphertext)
+		return plain - MAXVAL
 	end
 
 	# Returns a detached signature for any message
@@ -232,7 +282,7 @@ module Paillier
 		#s1 = ((numerators1[0] / denominators1[0]))[0] % pub.n
 		inverse_denom = Paillier.modInv(denominators1.to_i, pub.n)
 		s1 = numerators1.to_bn.mod_mul(inverse_denom, pub.n)
-		
+
 		inverse_n = Paillier.modInv(pub.n, priv.l)
 		inverse_g = Paillier.modInv(pub.g.to_bn.mod_exp(s1.to_bn, pub.n).to_i, pub.n)
 		s2 = (hashData * inverse_g).to_bn.mod_exp(inverse_n, pub.n)
